@@ -8,6 +8,7 @@ from .utils import bytes_to_str
 
 class RedisMixin(object):
     """Mixin class to implement reading urls from a redis queue."""
+
     redis_key = None
     redis_batch_size = None
     redis_encoding = None
@@ -31,7 +32,7 @@ class RedisMixin(object):
             # We allow optional crawler argument to keep backwards
             # compatibility.
             # XXX: Raise a deprecation warning.
-            crawler = getattr(self, 'crawler', None)
+            crawler = getattr(self, "crawler", None)
 
         if crawler is None:
             raise ValueError("crawler is required")
@@ -40,10 +41,10 @@ class RedisMixin(object):
 
         if self.redis_key is None:
             self.redis_key = settings.get(
-                'REDIS_START_URLS_KEY', defaults.START_URLS_KEY,
+                "REDIS_START_URLS_KEY", defaults.START_URLS_KEY
             )
 
-        self.redis_key = self.redis_key % {'name': self.name}
+        self.redis_key = self.redis_key % {"name": self.name}
 
         if not self.redis_key.strip():
             raise ValueError("redis_key must not be empty")
@@ -51,8 +52,7 @@ class RedisMixin(object):
         if self.redis_batch_size is None:
             # TODO: Deprecate this setting (REDIS_START_URLS_BATCH_SIZE).
             self.redis_batch_size = settings.getint(
-                'REDIS_START_URLS_BATCH_SIZE',
-                settings.getint('CONCURRENT_REQUESTS'),
+                "REDIS_START_URLS_BATCH_SIZE", settings.getint("CONCURRENT_REQUESTS")
             )
 
         try:
@@ -61,11 +61,15 @@ class RedisMixin(object):
             raise ValueError("redis_batch_size must be an integer")
 
         if self.redis_encoding is None:
-            self.redis_encoding = settings.get('REDIS_ENCODING', defaults.REDIS_ENCODING)
+            self.redis_encoding = settings.get(
+                "REDIS_ENCODING", defaults.REDIS_ENCODING
+            )
 
-        self.logger.info("Reading start URLs from redis key '%(redis_key)s' "
-                         "(batch size: %(redis_batch_size)s, encoding: %(redis_encoding)s",
-                         self.__dict__)
+        self.logger.info(
+            "Reading start URLs from redis key '%(redis_key)s' "
+            "(batch size: %(redis_batch_size)s, encoding: %(redis_encoding)s",
+            self.__dict__,
+        )
 
         self.server = connection.from_settings(crawler.settings)
         # The idle signal is called when the spider has no requests left,
@@ -74,16 +78,14 @@ class RedisMixin(object):
 
     def next_requests(self):
         """Returns a request to be scheduled or none."""
-        use_set = self.settings.getbool('REDIS_START_URLS_AS_SET', defaults.START_URLS_AS_SET)
-        fetch_one = self.server.spop if use_set else self.server.lpop
-        # XXX: Do we need to use a timeout here?
+        # For Priority Queue
+        pipe = self.server.pipeline()
+        pipe.multi()
+        pipe.zrange(self.redis_key, 0, 0).zremrangebyrank(self.redis_key, 0, 0)
+        results, count = pipe.execute()
         found = 0
-        # TODO: Use redis pipeline execution.
-        while found < self.redis_batch_size:
-            data = fetch_one(self.redis_key)
-            if not data:
-                # Queue empty.
-                break
+        if results:
+            data = results[0].decode("utf-8")
             req = self.make_request_from_data(data)
             if req:
                 yield req
